@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "botfetch",
+  "version": "${version}",
+  "name": "BotFetch",
+  "description": "对准方块或投影按 V，自动向仓库机器人下单取货，并在机器人送达后把收货假人召唤到身边。",
+  "authors": ["yhaa233"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.botfetch.BotFetchClient"]
+  },
+  "mixins": [
+    {
+      "config": "botfetch.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.16",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "litematica": "*"
+  }
+}
