@@ -13,6 +13,13 @@
 
 ---
 
+## 下载
+
+从 [Releases](https://github.com/yhaa233/botfetch/releases/latest) 下载 `botfetch-x.y.z.jar`，
+放进 `.minecraft/mods` 即可（Fabric 1.21.11 + Fabric API）。
+
+---
+
 ## 1. 依赖
 
 | 必须 | 说明 |
