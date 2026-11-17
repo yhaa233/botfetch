@@ -37,11 +37,10 @@ public final class RequestTracker {
             "取到\\s*(\\d+)\\s*/\\s*(\\d+)\\s*个\\s*([^，,]+)[，,]\\s*来自\\s*(\\d+)\\s*个箱(?:子)?");
     /** findbox 的完成回复。 */
     private static final Pattern FINDBOX_SUCCESS = Pattern.compile("完成：取盒\\s*(\\d+)\\s*个");
-    /** 「已放到假人 A、B 身上」/「交给假人 A、B」里的一整段名字。 */
-    private static final Pattern NAME_SEGMENT = Pattern.compile(
-            "(?:已放到假人|交给假人)\\s*([^，,。]*?)\\s*(?:身上)?(?=[，,。]|$)");
-    /** 名字分隔符。 */
-    private static final Pattern NAME_SPLIT = Pattern.compile("[、,，\\s]+");
+    /** 只认这两种假人名：qyb_botyong 和 SF_1~SF_99；括号里的件数等一律忽略。 */
+    private static final Pattern FAKE_NAME = Pattern.compile(
+            "(?<![A-Za-z0-9_])(qyb_botyong|SF_(?:[1-9]|[1-9][0-9]))(?![A-Za-z0-9_])",
+            Pattern.CASE_INSENSITIVE);
 
     private static final Pattern FAILURE = Pattern.compile("没取到|正在忙「|索引是空的|仓库里没有");
     private static final Pattern BUSY = Pattern.compile("正在忙「");
@@ -238,20 +237,14 @@ public final class RequestTracker {
         }
     }
 
-    /** 从「已放到假人 A、B 身上」/「交给假人 A、B」里取出所有名字。 */
+    /** 从回复里扫出所有白名单假人名（按出现顺序去重）。 */
     static List<String> parseFakeNames(String text) {
         List<String> names = new ArrayList<>();
-        Matcher segment = NAME_SEGMENT.matcher(text);
-        while (segment.find()) {
-            String raw = segment.group(1);
-            if (raw == null || raw.isBlank()) {
-                continue;
-            }
-            for (String piece : NAME_SPLIT.split(raw.trim())) {
-                String name = piece.trim();
-                if (!name.isEmpty() && !names.contains(name)) {
-                    names.add(name);
-                }
+        Matcher matcher = FAKE_NAME.matcher(text);
+        while (matcher.find()) {
+            String name = matcher.group(1);
+            if (!names.contains(name)) {
+                names.add(name);
             }
         }
         return names;
