@@ -5,6 +5,7 @@ import net.minecraft.text.Text;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -14,11 +15,13 @@ import java.util.regex.Pattern;
 /**
  * 请求的生命周期：发出 → 等 996_bot 私聊回复 → 解析假人名字 → kill + spawn 到身边。
  *
- * <p>机器人回复形如：
- * {@code 取到 1728/1728 个 黏性活塞，来自 1 个箱子，已放到假人 qyb_botyong 身上，用时 6s}</p>
+ * <p>机器人有两种完成回复，且都可能列出多个假人（qyb_botyong 满了会用 SF_1…）：</p>
+ * <pre>
+ * 取到 1728/1728 个 黏性活塞，来自 3 个箱子，已放到假人 qyb_botyong、SF_1 身上，用时 6s
+ * 完成：取盒 2 个，零头装盒 59 件，交给假人 qyb_botyong、SF_1，共 2 个盒子
+ * </pre>
  *
- * <p>批量模式（材料清单「请求材料」）会按队列逐个下单，等上一条回复再发下一条，
- * 全部结束后只召唤一次假人。</p>
+ * <p>回复里出现几个假人，就把几个全部 kill + spawn 到玩家脚下（命令同一瞬间发）。</p>
  */
 public final class RequestTracker {
     public enum State {
@@ -29,13 +32,18 @@ public final class RequestTracker {
     public record Pending(TargetPicker.Target target, int count) {
     }
 
+    /** find 的完成回复。 */
     private static final Pattern SUCCESS = Pattern.compile(
-            "取到\\s*(\\d+)\\s*/\\s*(\\d+)\\s*个\\s*([^，,]+)[，,]\\s*来自\\s*(\\d+)\\s*个箱(?:子)?"
-                    + "(?:.*?已放到假人\\s*([^\\s，,、]+)\\s*身上)?");
-    private static final Pattern FAKE_NAME = Pattern.compile(
-            "(?:已放到假人|交给假人)\\s*([^\\s，,、]+)");
+            "取到\\s*(\\d+)\\s*/\\s*(\\d+)\\s*个\\s*([^，,]+)[，,]\\s*来自\\s*(\\d+)\\s*个箱(?:子)?");
+    /** findbox 的完成回复。 */
+    private static final Pattern FINDBOX_SUCCESS = Pattern.compile("完成：取盒\\s*(\\d+)\\s*个");
+    /** 「已放到假人 A、B 身上」/「交给假人 A、B」里的一整段名字。 */
+    private static final Pattern NAME_SEGMENT = Pattern.compile(
+            "(?:已放到假人|交给假人)\\s*([^，,。]*?)\\s*(?:身上)?(?=[，,。]|$)");
+    /** 名字分隔符。 */
+    private static final Pattern NAME_SPLIT = Pattern.compile("[、,，\\s]+");
+
     private static final Pattern FAILURE = Pattern.compile("没取到|正在忙「|索引是空的|仓库里没有");
-    /** 机器人正忙时的重试。 */
     private static final Pattern BUSY = Pattern.compile("正在忙「");
     private static final int BUSY_RETRIES = 3;
     private static final int BUSY_RETRY_TICKS = 100;
@@ -47,7 +55,7 @@ public final class RequestTracker {
     private static TargetPicker.Target target;
     private static int count = 1;
     private static long sentAt;
-    private static String fakeName;
+    private static List<String> fakeNames = List.of();
 
     private static final Deque<Pending> QUEUE = new ArrayDeque<>();
     private static boolean batch;
@@ -55,10 +63,11 @@ public final class RequestTracker {
     private static int batchTotal;
     private static int batchOk;
     private static int batchFail;
-    private static String lastFakeName;
+    /** 整个批量过程中出现过的假人（最后一个任务结束后一起召唤）。 */
+    private static final LinkedHashSet<String> batchFakeNames = new LinkedHashSet<>();
 
+    private static List<String> summonNames = List.of();
     private static int summonTicks;
-    private static String summonName;
 
     private static Pending retryPending;
     private static int retryTicks;
@@ -99,7 +108,7 @@ public final class RequestTracker {
         batchTotal = 0;
         batchOk = 0;
         batchFail = 0;
-        lastFakeName = null;
+        batchFakeNames.clear();
         clearRetry();
         send(requested, amount);
     }
@@ -113,7 +122,7 @@ public final class RequestTracker {
         batchTotal = items.size();
         batchOk = 0;
         batchFail = 0;
-        lastFakeName = null;
+        batchFakeNames.clear();
         clearRetry();
         sendNext();
     }
@@ -133,7 +142,7 @@ public final class RequestTracker {
         target = requested;
         count = amount;
         sentAt = System.currentTimeMillis();
-        fakeName = null;
+        fakeNames = List.of();
         String command = cfg.requestCommand
                 .replace("{bot}", cfg.botName)
                 .replace("{item}", requested.itemId())
@@ -184,35 +193,35 @@ public final class RequestTracker {
             }
         }
         if (state == State.SUMMONING && summonTicks-- <= 0) {
-            String name = summonName;
-            summonName = null;
+            List<String> names = summonNames;
+            summonNames = List.of();
             state = State.IDLE;
-            if (name != null) {
-                BotFetchClient.sendCommand(cfg.spawnCommand.replace("{fake}", name));
-                BotFetchClient.chat(Text.translatable("message.botfetch.summoned", name));
-                setNotice(Text.translatable("message.botfetch.summoned", name), 0x7CFC00, 4000);
+            if (!names.isEmpty()) {
+                // 全部同一瞬间发
+                for (String name : names) {
+                    BotFetchClient.sendCommand(cfg.spawnCommand.replace("{fake}", name));
+                }
+                Text text = summary("message.botfetch.summoned", names);
+                BotFetchClient.chat(text);
+                setNotice(text, 0x7CFC00, 5000);
             }
         }
     }
 
-    /** 所有聊天消息都会进来，这里只认机器人那句回复。 */
+    /** 所有聊天消息都会进来，这里只认机器人那两句完成回复。 */
     public static void onChat(Text message) {
         if (state != State.WAITING) {
             return;
         }
         String text = message.getString().replace('\n', ' ').replace('\r', ' ').trim();
-        Matcher success = SUCCESS.matcher(text);
-        if (success.find()) {
-            String fake = success.group(5);
-            if (fake == null) {
-                Matcher nameMatcher = FAKE_NAME.matcher(text);
-                if (nameMatcher.find()) {
-                    fake = nameMatcher.group(1);
-                }
-            }
-            advance(fake, true);
+
+        boolean find = SUCCESS.matcher(text).find();
+        boolean findbox = FINDBOX_SUCCESS.matcher(text).find();
+        if (find || findbox) {
+            advance(resolveNames(parseFakeNames(text)), true);
             return;
         }
+
         Matcher failure = FAILURE.matcher(text);
         if (failure.find()) {
             if (BUSY.matcher(text).find() && retryCount < BUSY_RETRIES) {
@@ -225,18 +234,61 @@ public final class RequestTracker {
                         BUSY_RETRY_TICKS / 20, retryCount));
                 return;
             }
-            advance(null, false);
+            advance(List.of(), false);
         }
     }
 
-    private static void advance(String fake, boolean ok) {
+    /** 从「已放到假人 A、B 身上」/「交给假人 A、B」里取出所有名字。 */
+    static List<String> parseFakeNames(String text) {
+        List<String> names = new ArrayList<>();
+        Matcher segment = NAME_SEGMENT.matcher(text);
+        while (segment.find()) {
+            String raw = segment.group(1);
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            for (String piece : NAME_SPLIT.split(raw.trim())) {
+                String name = piece.trim();
+                if (!name.isEmpty() && !names.contains(name)) {
+                    names.add(name);
+                }
+            }
+        }
+        return names;
+    }
+
+    /** 过滤掉 "drop-fallback" 之类的伪名字；回复里完全没写假人时才用配置兜底。 */
+    private static List<String> resolveNames(List<String> parsed) {
+        List<String> out = new ArrayList<>();
+        for (String name : parsed) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            if (NOT_A_PLAYER.contains(name.toLowerCase(Locale.ROOT))) {
+                continue;
+            }
+            if (!out.contains(name)) {
+                out.add(name);
+            }
+        }
+        if (out.isEmpty() && parsed.isEmpty()) {
+            BotFetchConfig cfg = BotFetchClient.config;
+            String fallback = cfg == null || cfg.fallbackFakePlayer == null ? "" : cfg.fallbackFakePlayer.trim();
+            if (!fallback.isEmpty()) {
+                out.add(fallback);
+            }
+        }
+        return out;
+    }
+
+    private static void advance(List<String> names, boolean ok) {
         state = State.IDLE;
         if (ok) {
             retryCount = 0;
             batchOk++;
-            String resolved = resolveFakeName(fake);
-            if (resolved != null) {
-                lastFakeName = resolved;
+            if (!names.isEmpty()) {
+                fakeNames = names;
+                batchFakeNames.addAll(names);
             }
         } else {
             batchFail++;
@@ -248,22 +300,6 @@ public final class RequestTracker {
         finishBatch();
     }
 
-    private static String resolveFakeName(String fake) {
-        BotFetchConfig cfg = BotFetchClient.config;
-        String name = fake;
-        if (name == null && cfg != null) {
-            // 机器人有些回复不带「已放到假人 … 身上」，用配置兜底
-            String fallback = cfg.fallbackFakePlayer == null ? "" : cfg.fallbackFakePlayer.trim();
-            if (!fallback.isEmpty()) {
-                name = fallback;
-            }
-        }
-        if (name != null && NOT_A_PLAYER.contains(name.toLowerCase(Locale.ROOT))) {
-            return null;
-        }
-        return name;
-    }
-
     private static void finishBatch() {
         boolean wasBatch = batch;
         batch = false;
@@ -273,16 +309,27 @@ public final class RequestTracker {
         setNotice(Text.translatable("message.botfetch.done"), 0x7CFC00, 4000);
 
         BotFetchConfig cfg = BotFetchClient.config;
-        String name = lastFakeName;
-        lastFakeName = null;
-        if (cfg == null || !cfg.summonEnabled || name == null) {
+        List<String> names = new ArrayList<>(batchFakeNames);
+        batchFakeNames.clear();
+        fakeNames = List.of();
+        if (cfg == null || !cfg.summonEnabled || names.isEmpty()) {
             return;
         }
         state = State.SUMMONING;
-        summonName = name;
+        summonNames = names;
         summonTicks = Math.max(1, cfg.summonDelayTicks);
-        BotFetchClient.sendCommand(cfg.killCommand.replace("{fake}", name));
-        BotFetchClient.chat(Text.translatable("message.botfetch.summoning", name));
+        for (String name : names) {
+            BotFetchClient.sendCommand(cfg.killCommand.replace("{fake}", name));
+        }
+        BotFetchClient.chat(summary("message.botfetch.summoning", names));
+    }
+
+    private static Text summary(String key, List<String> names) {
+        String joined = String.join("、", names);
+        if (names.size() == 1) {
+            return Text.translatable(key, joined);
+        }
+        return Text.translatable(key + ".multi", names.size(), joined);
     }
 
     /** HUD 第二行。 */
@@ -300,7 +347,8 @@ public final class RequestTracker {
         return switch (state) {
             case WAITING -> Text.translatable("hud.botfetch.waiting",
                     cfg == null ? "996_bot" : cfg.botName);
-            case SUMMONING -> Text.translatable("hud.botfetch.summoning", summonName == null ? "?" : summonName);
+            case SUMMONING -> Text.translatable("hud.botfetch.summoning",
+                    String.join("、", summonNames));
             default -> Text.translatable("hud.botfetch.hint");
         };
     }
