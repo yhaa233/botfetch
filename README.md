@@ -129,7 +129,7 @@ BotFetch 设置界面
 ## 7. 从源码构建
 
 ```powershell
-# 需要 JDK 25（Loom 1.18 要求），产物在 build/libs/botfetch-0.3.0.jar
+# 需要 JDK 25（Loom 1.18 要求），产物在 build/libs/botfetch-0.3.1.jar
 .\gradlew build
 ```
 

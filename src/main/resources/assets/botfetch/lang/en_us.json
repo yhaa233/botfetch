@@ -31,6 +31,8 @@
   "message.botfetch.timeout": "No reply after %s s, giving up",
   "message.botfetch.adjust_on": "Amount mode ON: scroll to adjust, Alt+V to close",
   "message.botfetch.adjust_off": "Amount mode OFF",
+  "message.botfetch.retry": "Bot is busy, retrying in %s s (attempt %s)",
+  "hud.botfetch.retry": "Waiting for the bot…",
   "hud.botfetch.hint": "Alt+V to adjust amount",
   "hud.botfetch.adjusting": "Scroll ±1 · Shift x10 · Alt+V to exit",
   "hud.botfetch.amount": "Amount x%s",

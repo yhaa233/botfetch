@@ -35,6 +35,10 @@ public final class RequestTracker {
     private static final Pattern FAKE_NAME = Pattern.compile(
             "(?:已放到假人|交给假人)\\s*([^\\s，,、]+)");
     private static final Pattern FAILURE = Pattern.compile("没取到|正在忙「|索引是空的|仓库里没有");
+    /** 机器人正忙时的重试。 */
+    private static final Pattern BUSY = Pattern.compile("正在忙「");
+    private static final int BUSY_RETRIES = 3;
+    private static final int BUSY_RETRY_TICKS = 100;
     /** 机器人投递失败时会把 "drop-fallback" 之类当成假人名，别去 kill 它。 */
     private static final Set<String> NOT_A_PLAYER =
             Set.of("drop-fallback", "drop", "chest", "failed", "none", "fakeplayer");
@@ -55,6 +59,10 @@ public final class RequestTracker {
 
     private static int summonTicks;
     private static String summonName;
+
+    private static Pending retryPending;
+    private static int retryTicks;
+    private static int retryCount;
 
     private static Text notice;
     private static int noticeColor = 0xFFFFFF;
@@ -92,6 +100,7 @@ public final class RequestTracker {
         batchOk = 0;
         batchFail = 0;
         lastFakeName = null;
+        clearRetry();
         send(requested, amount);
     }
 
@@ -105,7 +114,14 @@ public final class RequestTracker {
         batchOk = 0;
         batchFail = 0;
         lastFakeName = null;
+        clearRetry();
         sendNext();
+    }
+
+    private static void clearRetry() {
+        retryPending = null;
+        retryTicks = 0;
+        retryCount = 0;
     }
 
     private static void send(TargetPicker.Target requested, int amount) {
@@ -145,6 +161,15 @@ public final class RequestTracker {
         BotFetchConfig cfg = BotFetchClient.config;
         if (cfg == null) {
             return;
+        }
+        if (retryTicks > 0 && state == State.IDLE) {
+            if (--retryTicks == 0) {
+                Pending pending = retryPending;
+                retryPending = null;
+                if (pending != null) {
+                    send(pending.target(), pending.count());
+                }
+            }
         }
         if (state == State.WAITING && System.currentTimeMillis() - sentAt > cfg.replyTimeoutSeconds * 1000L) {
             boolean wasBatch = batch;
@@ -190,6 +215,16 @@ public final class RequestTracker {
         }
         Matcher failure = FAILURE.matcher(text);
         if (failure.find()) {
+            if (BUSY.matcher(text).find() && retryCount < BUSY_RETRIES) {
+                // 机器人正忙：保留这条请求，过几秒重发，别当成失败
+                retryCount++;
+                retryPending = new Pending(target, count);
+                retryTicks = BUSY_RETRY_TICKS;
+                state = State.IDLE;
+                BotFetchClient.chat(Text.translatable("message.botfetch.retry",
+                        BUSY_RETRY_TICKS / 20, retryCount));
+                return;
+            }
             advance(null, false);
         }
     }
@@ -197,6 +232,7 @@ public final class RequestTracker {
     private static void advance(String fake, boolean ok) {
         state = State.IDLE;
         if (ok) {
+            retryCount = 0;
             batchOk++;
             String resolved = resolveFakeName(fake);
             if (resolved != null) {
@@ -254,6 +290,9 @@ public final class RequestTracker {
         BotFetchConfig cfg = BotFetchClient.config;
         if (notice != null && System.currentTimeMillis() < noticeUntil) {
             return notice;
+        }
+        if (retryTicks > 0) {
+            return Text.translatable("hud.botfetch.retry");
         }
         if (batch && state == State.WAITING) {
             return Text.translatable("hud.botfetch.batch", batchIndex, batchTotal);

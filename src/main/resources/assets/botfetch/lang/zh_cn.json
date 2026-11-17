@@ -31,6 +31,8 @@
   "message.botfetch.timeout": "等了 %s 秒没收到回复，已放弃这次请求",
   "message.botfetch.adjust_on": "数量调节已开启：滚轮改数量，Alt+V 关闭",
   "message.botfetch.adjust_off": "数量调节已关闭",
+  "message.botfetch.retry": "机器人正忙，%s 秒后重试（第 %s 次）",
+  "hud.botfetch.retry": "等待机器人空闲…",
   "hud.botfetch.hint": "Alt+V 调节数量",
   "hud.botfetch.adjusting": "滚轮 ±1 · Shift ×10 · Alt+V 退出",
   "hud.botfetch.amount": "数量 ×%s",

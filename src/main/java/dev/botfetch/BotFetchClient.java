@@ -174,11 +174,7 @@ public class BotFetchClient implements ClientModInitializer {
             chat(Text.translatable("message.botfetch.busy", config.botName));
             return;
         }
-        String command = config.requestCommand
-                .replace("{bot}", config.botName)
-                .replace("{item}", target.itemId())
-                .replace("{count}", Integer.toString(config.count));
-        sendCommand(command);
+        // 指令统一由 RequestTracker 发送（单条/批量共用同一条发送路径，别在这里再发一次）
         RequestTracker.begin(target, config.count);
         chat(Text.translatable("message.botfetch.sent", target.stack().getName(), config.count));
     }
